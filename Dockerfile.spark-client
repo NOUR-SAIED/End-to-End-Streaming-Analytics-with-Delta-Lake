@@ -1,0 +1,72 @@
+FROM python:3.9-bullseye
+
+# Variables d'environnement
+ENV SPARK_VERSION=3.3.0
+ENV HADOOP_VERSION=3
+ENV DELTA_SPARK_VERSION=2.3.0
+ENV SCALA_VERSION=2.12
+
+# Installation des dépendances système
+USER root
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    wget \
+    curl \
+    bash \
+    procps \
+    ca-certificates \
+    gnupg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Installation de Java avec retry et fix-missing
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends --fix-missing \
+    openjdk-11-jre-headless || \
+    (apt-get clean && apt-get update && apt-get install -y --no-install-recommends openjdk-11-jre-headless) && \
+    rm -rf /var/lib/apt/lists/*
+
+# Configuration Java
+ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+ENV PATH=$PATH:$JAVA_HOME/bin
+
+# Téléchargement et installation de Spark
+RUN wget -q https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz && \
+    tar -xzf spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz -C /opt/ && \
+    mv /opt/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION} /opt/spark && \
+    rm spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz
+
+# Configuration Spark
+ENV SPARK_HOME=/opt/spark
+ENV PATH=$PATH:$SPARK_HOME/bin:$SPARK_HOME/sbin
+ENV PYSPARK_PYTHON=python3
+ENV PYTHONPATH=$SPARK_HOME/python:$SPARK_HOME/python/lib/py4j-0.10.9.5-src.zip:$PYTHONPATH
+
+# Installation des packages Python
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir \
+    kafka-python==2.0.2 \
+    delta-spark==${DELTA_SPARK_VERSION} \
+    pyspark==3.3.0
+
+# Création du répertoire de travail
+WORKDIR /app
+RUN mkdir -p /app/scripts /tmp/delta/checkpoints /tmp/delta/bronze /tmp/delta/silver
+
+# Copie des scripts (tous les fichiers)
+COPY producer_ventes.py /app/
+COPY spark_streaming_delta.py /app/
+COPY spark_streaming_bronze.py /app/
+COPY spark_streaming_silver.py /app/
+COPY dashboard_analysis.py /app/
+COPY create_delta_tables.py /app/
+
+# Création d'un utilisateur non-root
+RUN useradd -m -u 1000 sparkuser && \
+    chown -R sparkuser:sparkuser /app /tmp/delta /opt/spark/work-dir || true
+
+USER sparkuser
+
+# Configuration des logs Spark
+ENV SPARK_LOG_LEVEL=WARN
+
+CMD ["tail", "-f", "/dev/null"]
